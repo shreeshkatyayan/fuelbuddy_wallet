@@ -38,6 +38,13 @@ CASH_ADVANCE_TERMS = "Cash advance"
 # balance.
 FB_SETTINGS_DOCTYPE = "Fuelbuddy Settings"
 
+# Quantity correction (IDEV-3266). fuelbuddy_crm's amend_delivery_note sets this flag on
+# the Delivery Note it saves or reissues (doc.flags, so it never reaches another document).
+# A correction is approved before it gets here and is never refused for the wallet: the
+# on_update / on_cancel / after_delete recompute still books it, even below zero, and crm
+# raises the overshoot Issue itself.
+QC_AMEND_FLAG = "fb_qc_amend"
+
 
 def _wallet_enabled():
 	"""True when the Wallet feature is enabled in Fuelbuddy Settings (default off)."""
@@ -276,6 +283,10 @@ def enforce_wallet_balance(doc, method=None):
 	accounting for other open drafts already reserving the balance -- unless an
 	active breach allowance covers the shortfall. On a hard block, raise a
 	support Issue (in its own transaction so it survives the rollback) and throw.
+
+	A quantity correction (``doc.flags`` QC_AMEND_FLAG) is never blocked: where
+	the refusal would come, it returns instead, with no throw and no block Issue.
+	Everything before that (breach close / stamp) runs as for any Delivery Note.
 	"""
 	if not _wallet_enabled():
 		return  # feature disabled in Fuelbuddy Settings -> never block on wallet balance
@@ -333,6 +344,9 @@ def enforce_wallet_balance(doc, method=None):
 		if not wallet.date_of_breach:
 			frappe.db.set_value("Wallet", wallet.name, "date_of_breach", now_datetime())
 		return
+
+	if doc.flags.get(QC_AMEND_FLAG):
+		return  # approved quantity correction: applied even below zero (see QC_AMEND_FLAG)
 
 	subject = "Wallet balance insufficient for Delivery Note " + str(doc.customer)
 	# Reuse an already-open ticket if there is one; otherwise raise a fresh Issue in
